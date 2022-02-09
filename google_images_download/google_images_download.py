@@ -44,7 +44,7 @@ args_list = ["keywords", "keywords_from_file", "prefix_keywords", "suffix_keywor
              "print_urls", "print_size", "print_paths", "metadata", "extract_metadata", "socket_timeout",
              "thumbnail", "thumbnail_only", "language", "prefix", "chromedriver", "related_images", "safe_search",
              "no_numbering",
-             "offset", "no_download", "save_source", "silent_mode", "ignore_urls"]
+             "offset", "no_download", "save_source", "silent_mode", "ignore_urls", "raw_google_data"]
 
 
 def user_input():
@@ -195,13 +195,15 @@ class googleimagesdownload:
         lines = data.split('\n')
         return json.loads(lines[3])[0][2]
 
-    def _image_objects_from_pack(self, data):
+    def _image_objects_from_pack(self, data, raw_google_data_filepath=None):
+        if raw_google_data_filepath is not None:
+            with open(raw_google_data_filepath, "w") as f: json.dump(json.loads(data), f)
         image_objects = json.loads(data)[31][-1][12][2]
         image_objects = [x for x in image_objects if x[0] == 1]
         return image_objects
 
     # Downloading entire Web Document (Raw Page Content)
-    def download_page(self, url):
+    def download_page(self, url, raw_google_data_filepath=None):
         version = (3, 0)
         cur_version = sys.version_info
         headers = {}
@@ -231,14 +233,14 @@ class googleimagesdownload:
                 sys.exit()
                 return "Page Not found"
         try:
-            return self._image_objects_from_pack(self._extract_data_pack(respData)), self.get_all_tabs(respData)
+            return self._image_objects_from_pack(self._extract_data_pack(respData), raw_google_data_filepath), self.get_all_tabs(respData)
         except Exception as e:
             print(e)
             print('Image objects data unpacking failed. Please leave a comment with the above error at https://github.com/hardikvasa/google-images-download/pull/298')
             sys.exit()
 
     # Download Page for more than 100 images
-    def download_extended_page(self, url, chromedriver):
+    def download_extended_page(self, url, chromedriver, raw_google_data_filepath=None):
         from selenium import webdriver
         from selenium.webdriver.common.keys import Keys
         if sys.version_info[0] < 3:
@@ -310,11 +312,17 @@ class googleimagesdownload:
         time.sleep(0.5)
 
         source = browser.page_source  # page source
-        images = self._image_objects_from_pack(self._extract_data_pack_extended(source))
+        images = self._image_objects_from_pack(self._extract_data_pack_extended(source), raw_google_data_filepath)
 
         ajax_data = browser.execute_script("return XMLHttpRequest.prototype._data")
+        extract_id = 2
         for chunk in ajax_data:
-            images += self._image_objects_from_pack(self._extract_data_pack_ajax(chunk))
+            if raw_google_data_filepath is None:
+                sub_raw_google_data_filepath = None
+            else:
+                sub_raw_google_data_filepath = f"{raw_google_data_filepath[:-5]}_{extract_id}.json"
+            images += self._image_objects_from_pack(self._extract_data_pack_ajax(chunk), sub_raw_google_data_filepath)
+            extract_id += 1
 
         # close the browser
         browser.close()
@@ -1018,6 +1026,12 @@ class googleimagesdownload:
             current_time = str(datetime.datetime.now()).split('.')[0]
             search_keyword = [current_time.replace(":", "_")]
 
+        if arguments['raw_google_data']:
+            os.makedirs("raw_google_data", exist_ok=True)
+            raw_google_data = True
+        else:
+            raw_google_data = False
+
         # If single_image or url argument not present then keywords is mandatory argument
         if arguments['single_image'] is None and arguments['url'] is None and arguments['similar_images'] is None and \
                 arguments['keywords'] is None and arguments['keywords_from_file'] is None:
@@ -1080,11 +1094,17 @@ class googleimagesdownload:
                     url = self.build_search_url(search_term, params, arguments['url'], arguments['similar_images'],
                                                 arguments['specific_site'],
                                                 arguments['safe_search'])  # building main search url
+                    
+                    if raw_google_data:
+                        google_data_filename = f'{pky}{search_keyword[i]}{sky}.json'.replace('/', '_')
+                        raw_google_data_filepath = os.path.join('raw_google_data', google_data_filename)
+                    else:
+                        raw_google_data_filepath = None
 
                     if limit < 101:
-                        images, tabs = self.download_page(url)  # download page
+                        images, tabs = self.download_page(url, raw_google_data_filepath)  # download page
                     else:
-                        images, tabs = self.download_extended_page(url, arguments['chromedriver'])
+                        images, tabs = self.download_extended_page(url, arguments['chromedriver'], raw_google_data_filepath)
 
                     if not arguments["silent_mode"]:
                         if arguments['no_download']:
